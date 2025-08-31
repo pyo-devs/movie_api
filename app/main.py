@@ -1,6 +1,6 @@
 import httpx
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import Callable, List, Dict, Any, Tuple
 from datetime import date
 from decimal import Decimal
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -43,47 +43,23 @@ def get_tmdb(path: str, **params):
     r.raise_for_status()
     return r.json()
 
-def set_movie() -> List[Dict[str, Any]]:
-    # /movie/top_rated?language=ko-kr&page=1
-    # total_pages, total_results 가져와서 모든 페이지 insert하기
-    #####################################################
-    data = get_tmdb("/movie/top_rated", language="ko-kr", page=1)
-    print(len(data))
-    if not data:
-        print("TMDB 데이터 없음")
-        return 0
 
-    results = data.get("results") or []
-    page = data.get("page") or ""
-    total_pages = data.get("total_pages") or ""
-    total_results = data.get("total_results") or ""
-    print(len(results))    
-    if not len(results) > 0 :
-        print("TMDB 데이터 결과 없음")
-        return 0
-    
-    # return
-    # 컬럼매핑 및 테이블 설정
-    movie_rows = map_movie(results)
-    movie_info_rows = map_movie_info(results)
-    movie_genre_rows = map_movie_genre(results)
-    
-    # return
+
+def execute_upserts (*jobs: Tuple[Callable[[List[Dict[str, Any]]], Any], List[Dict[str, Any]]]
+) -> int:
+    """
+    jobs: (stmt_builder, rows) 튜플들의 가변인자.
+          예: (build_movie, movie_rows), (build_movie_info, movie_info_rows), ...
+    반환: 영향을 받은 총 rowcount (None일 수 있어 or 0 처리)
+    """
     total = 0
     with engine.begin() as conn:
-        if movie_rows:
-            res = conn.execute(build_movie(movie_rows))
-            total += res.rowcount or 0
-        
-        if movie_info_rows:
-            res = conn.execute(build_movie_info(movie_info_rows))
-            total += res.rowcount or 0
-
-        if movie_info_rows:
-            res = conn.execute(build_movie_genre(movie_genre_rows))
-            total += res.rowcount or 0
-
-        return total
+        for builder, rows in jobs:
+            if rows:
+                stmt = builder(rows)
+                res = conn.execute(stmt)
+                total += res.rowcount or 0
+    return total
 
 def build_movie(data : List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
